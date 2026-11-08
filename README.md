@@ -21,6 +21,7 @@ A **platform plugin** for [Hermes Agent](https://github.com/NousResearch/hermes-
 |---------|--------|
 | 📨 Send/receive text messages (2000-char chunks) | ✅ |
 | 🖼️ Send photos from URL | ✅ |
+| 📷 Incoming photos, stickers and voice messages reach the agent (vision, speech-to-text) | ✅ |
 | ⌨️ Typing indicator (`sendChatAction`) | ✅ |
 | 🔄 Long-polling (`getUpdates`) | ✅ |
 | 🌐 Webhook mode (via aiohttp) | ✅ |
@@ -38,7 +39,7 @@ A **platform plugin** for [Hermes Agent](https://github.com/NousResearch/hermes-
 
 ### 🗺️ Roadmap
 
-- [ ] Sticker sending/receiving
+- [ ] Sticker sending (receiving works)
 - [ ] Image/file upload (multipart)
 - [ ] Voice message support
 - [ ] Rich text formatting (bold/italic/color)
