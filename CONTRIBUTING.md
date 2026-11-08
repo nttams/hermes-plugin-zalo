@@ -103,6 +103,10 @@ async def send_message(self, chat_id, text):
 ## Testing
 
 ```bash
+# Offline test suite (what CI runs)
+uv run --no-project --with hermes-agent==0.19.0 --with zalobot-sdk==0.1.0 \
+    --with pytest --with pytest-asyncio python -m pytest tests
+
 # Syntax check
 python -m py_compile zalo/adapter.py
 

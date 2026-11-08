@@ -202,10 +202,15 @@ ln -s $(pwd)/zalo ~/.hermes/plugins/zalo
 # Run syntax check
 python -m py_compile zalo/adapter.py
 
-# Test import
-cd /path/to/hermes-agent
-python -c "from gateway.platforms.base import BasePlatformAdapter; print('OK')"
+# Run the tests (offline: a real Hermes Agent and an in-memory Zalo Bot API)
+uv run --no-project --with hermes-agent==0.19.0 --with zalobot-sdk==0.1.0 \
+    --with pytest --with pytest-asyncio python -m pytest tests
 ```
+
+The tests never call Zalo: `zalobot.testing.FakeZalo` answers like the real
+Bot API (errors come with HTTP 200 and the code in the body, an empty
+`getUpdates` answers 408), and the plugin is registered the way Hermes loads it,
+so a change in Hermes' adapter API fails a test instead of a live chat.
 
 ---
 
