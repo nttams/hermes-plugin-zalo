@@ -1054,8 +1054,12 @@ class ZaloAdapter(BasePlatformAdapter):
             logger.debug("Zalo: ignoring /%s from unauthorized user %s", cmd, user_id)
             return
 
-        # Zalo's Bot API has no group roles to check admins against, so
-        # "admin" commands rely on the allowlist check above, like the rest.
+        # Zalo's Bot API has no group roles to check admins against, so admin
+        # commands need the sender listed in allowed_users by id: allow_all
+        # opens chat to everyone, not /mute, /warn or /name-trigger.
+        if spec["admin_only"] and user_id not in self.allowed_users:
+            await self._send_text(chat_id, "❌ Bạn không có quyền thực hiện lệnh này.")
+            return
 
         try:
             if cmd == "/menu":

@@ -10,7 +10,7 @@ description: >
 
   Zero extra dependencies — uses httpx, already a Hermes Agent dependency.
 
-  Slash commands (/menu, /warn, /kick, /promote, /poll, /pin, /noi-quy...),
+  Slash commands (/menu, /rules, /noi-quy, /warn, /silent, /mute...),
   zero-token anti-spam + warn system, chat history sync.
 author: Moken
 repository: "https://github.com/moken627-hub/hermes-plugin-zalo"

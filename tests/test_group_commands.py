@@ -106,3 +106,14 @@ async def test_menu_lists_only_working_commands(make_adapter, fake):
     menu = fake.sent[-1].text
     for gone in ("/kick", "/promote", "/demote", "/invite", "/poll", "/pin", "/unpin"):
         assert gone + " " not in menu and not menu.endswith(gone)
+
+
+@pytest.mark.asyncio
+async def test_allow_all_does_not_open_admin_commands(make_adapter, fake):
+    """With allow_all, anyone may chat and use /menu, but only listed users run admin commands."""
+    adapter, _ = await make_adapter(allow_all=True, allowed_users=[OTHER_USER])
+    await _say(adapter, fake, "/name-trigger giá Đây là link lừa đảo")
+    assert adapter._group_settings.get(GROUP).get("name_triggers", []) == []
+    assert "không có quyền" in fake.sent[-1].text
+    await _say(adapter, fake, "/menu")
+    assert "/menu" in fake.sent[-1].text
