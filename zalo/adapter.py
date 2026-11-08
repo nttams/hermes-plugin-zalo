@@ -742,6 +742,7 @@ class ZaloAdapter(BasePlatformAdapter):
         self._bot_display_name: str = ""
         self._pending_approvals: Dict[str, dict] = {}  # chat_id -> captcha info
         self._captcha_passed: set = set()  # chat_ids that solved the captcha
+        self._webhook_tasks: set = set()  # webhook events still being handled
 
         # Moderation & group management instances. _GroupManager resolves
         # self._client lazily (client is only created in connect()).
@@ -844,6 +845,10 @@ class ZaloAdapter(BasePlatformAdapter):
                 pass
         self._webhook_runner = None
 
+        for task in list(self._webhook_tasks):
+            task.cancel()
+        self._webhook_tasks.clear()
+
         if self._client:
             await self._client.close()
             self._client = None
@@ -924,9 +929,7 @@ class ZaloAdapter(BasePlatformAdapter):
                 return web.Response(status=403, text="Unauthorized")
 
             try:
-                event_name, message = _webhook_update(await request.json())
-                if message:
-                    await self._handle_incoming(event_name, message)
+                self._accept_webhook_event(await request.json())
                 return web.json_response({"ok": True})
             except Exception as e:
                 logger.warning("Zalo: webhook handler error: %s", e)
@@ -948,6 +951,22 @@ class ZaloAdapter(BasePlatformAdapter):
             raise
         finally:
             await runner.cleanup()
+
+    def _accept_webhook_event(self, body: Any) -> None:
+        """Handle a webhook event in the background, so Zalo gets its 200 at
+        once instead of after a media download (up to 30 s, with retries)."""
+        event_name, message = _webhook_update(body)
+        if not message:
+            return
+        task = asyncio.create_task(self._handle_webhook_event(event_name, message))
+        self._webhook_tasks.add(task)
+        task.add_done_callback(self._webhook_tasks.discard)
+
+    async def _handle_webhook_event(self, event_name: str, message: dict) -> None:
+        try:
+            await self._handle_incoming(event_name, message)
+        except Exception:
+            logger.exception("Zalo: error handling webhook event %s", event_name)
 
     # ── Incoming message handling ─────────────────────────────────────────
 

@@ -6,6 +6,8 @@ url, voice_url): https://bot.zaloplatforms.com/docs/webhook/
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from gateway.platforms.base import MessageType
 from zalo_test_data import GROUP, USER, update
@@ -111,3 +113,25 @@ async def test_a_voice_message_that_cannot_be_downloaded_is_not_sent_empty(make_
     [event] = inbox.events
     assert event.text == "[Voice message]"
     assert event.media_urls == []
+
+
+@pytest.mark.asyncio
+async def test_webhook_answers_before_a_slow_download(make_adapter, fake, monkeypatch):
+    """Zalo gets its 200 at once; the photo is downloaded and handled afterwards."""
+    gate = asyncio.Event()
+
+    async def slow_cache(url, ext=".jpg", retries=2):
+        await gate.wait()
+        return "/tmp/photo.jpg"
+
+    monkeypatch.setattr(zalo_adapter, "cache_image_from_url", slow_cache)
+    adapter, inbox = await make_adapter()
+    adapter._accept_webhook_event(update(fake, "photo", chat_id=USER))
+    await asyncio.sleep(0)
+    assert inbox.events == []  # still downloading, but the request already returned
+    gate.set()
+    for _ in range(50):
+        if inbox.events:
+            break
+        await asyncio.sleep(0.01)
+    assert inbox.events[0].media_urls == ["/tmp/photo.jpg"]

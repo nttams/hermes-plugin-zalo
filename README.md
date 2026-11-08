@@ -41,7 +41,7 @@ A **platform plugin** for [Hermes Agent](https://github.com/NousResearch/hermes-
 
 - [ ] Sticker sending (receiving works)
 - [ ] Image/file upload (multipart)
-- [ ] Voice message support
+- [ ] Voice message sending (receiving works)
 - [ ] Rich text formatting (bold/italic/color)
 - [ ] Zalo labels sync
 
