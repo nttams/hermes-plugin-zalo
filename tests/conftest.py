@@ -31,11 +31,11 @@ for _name in (
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import httpx  # noqa: E402
 import pytest  # noqa: E402
 import pytest_asyncio  # noqa: E402
 from gateway.config import PlatformConfig  # noqa: E402
 from gateway.platform_registry import PlatformEntry, platform_registry  # noqa: E402
+from zalobot import AsyncBot  # noqa: E402
 from zalobot.testing import FakeZalo  # noqa: E402
 
 from zalo import adapter as zalo_adapter  # noqa: E402
@@ -87,13 +87,8 @@ def fake() -> FakeZalo:
 
 @pytest.fixture
 def route_to_fake(fake, monkeypatch):
-    """Send every _ZaloClient request to the fake instead of bot-api.zaloplatforms.com."""
-
-    async def _ensure_client(self):
-        if self._client is None:
-            self._client = httpx.AsyncClient(transport=fake.transport, timeout=5.0)
-
-    monkeypatch.setattr(zalo_adapter._ZaloClient, "_ensure_client", _ensure_client)
+    """Send every Bot API request to the fake instead of bot-api.zaloplatforms.com."""
+    monkeypatch.setattr(zalo_adapter, "_new_bot", lambda token: AsyncBot(token, transport=fake.transport, timeout=5.0))
     monkeypatch.setattr(zalo_adapter, "POLLING_INTERVAL", 0.01)
     return fake
 
@@ -134,7 +129,7 @@ async def make_adapter(route_to_fake, monkeypatch, tmp_path):
         if connect:
             assert await adapter.connect()
         else:
-            adapter._client = zalo_adapter._ZaloClient(adapter.bot_token)
+            adapter._client = zalo_adapter._new_bot(adapter.bot_token) if adapter.bot_token else None
             adapter._bot_id = BOT_ID
             adapter._bot_name = "bot.hermes"
             adapter._bot_display_name = "Bot Hermes"

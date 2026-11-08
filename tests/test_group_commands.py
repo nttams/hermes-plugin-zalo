@@ -10,7 +10,9 @@ name, {"ok": false, "error_code": 404, "description": "Not Found"}.
 
 from __future__ import annotations
 
+import httpx
 import pytest
+from zalobot import AsyncBot
 from zalo_test_data import GROUP, OTHER_USER, USER, update
 
 from zalo import adapter as zalo_adapter
@@ -31,16 +33,16 @@ SAMPLE_ARGS = {
 
 
 @pytest.fixture
-def endpoints(monkeypatch):
+def endpoints(fake, route_to_fake, monkeypatch):
     """Every Bot API method the plugin calls, documented or not."""
     called = []
-    real_post = zalo_adapter._ZaloClient._post
 
-    async def post(self, endpoint, data=None):
-        called.append(endpoint)
-        return await real_post(self, endpoint, data)
+    def handle(request: httpx.Request) -> httpx.Response:
+        called.append(request.url.path.rsplit("/", 1)[-1])
+        return fake._handle(request)
 
-    monkeypatch.setattr(zalo_adapter._ZaloClient, "_post", post)
+    monkeypatch.setattr(zalo_adapter, "_new_bot",
+                        lambda token: AsyncBot(token, transport=httpx.MockTransport(handle), timeout=5.0))
     return called
 
 

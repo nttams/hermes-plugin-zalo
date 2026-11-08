@@ -71,7 +71,7 @@ async def test_send_image_with_caption(make_adapter, fake):
     assert result.success
     assert fake.sent[0].method == "sendPhoto"
     assert fake.sent[0].fields == {"chat_id": USER, "photo": "https://example.com/chart.png",
-                                   "caption": "**Tuần này**", "parse_mode": "markdown"}
+                                   "caption": "Tuần này"}
 
 
 @pytest.mark.asyncio
@@ -86,3 +86,24 @@ async def test_standalone_send_for_cron(route_to_fake):
 async def test_standalone_send_needs_a_token(route_to_fake):
     result = await zalo_adapter._standalone_send(PlatformConfig(enabled=True, extra={}), USER, "x")
     assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_emoji_heavy_replies_fit_zalos_utf16_limit(make_adapter, fake):
+    """Zalo counts 2000 in UTF-16 units (most emoji are 2); zalobot refuses longer text before sending."""
+    adapter, _ = await make_adapter()
+    text = "😀" * 1500
+    result = await adapter.send(USER, text)
+    assert result.success
+    assert len(fake.sent) == 2
+    assert all(zalo_adapter.utf16_len(s.text) <= 2000 for s in fake.sent)
+    assert "".join(s.text for s in fake.sent) == text
+
+
+@pytest.mark.asyncio
+async def test_photo_captions_are_plain_text(make_adapter, fake):
+    """sendPhoto documents no parse_mode, so markdown markers are removed from captions."""
+    adapter, _ = await make_adapter()
+    await adapter.send_image(USER, "https://example.com/a.png", "## Tuần này\n**120k** cho `cafe`")
+    assert fake.sent[0].fields == {"chat_id": USER, "photo": "https://example.com/a.png",
+                                   "caption": "Tuần này\n120k cho cafe"}

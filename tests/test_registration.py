@@ -52,3 +52,9 @@ def test_adapter_commands_are_default_deny():
     assert adapter._is_user_authorized("anyone") is False
     # Agent-bound messages defer to Hermes' own authorization (pairing).
     assert adapter._passes_allowlist("anyone") is True
+
+
+def test_requirements_report_a_missing_zalobot(monkeypatch):
+    monkeypatch.setenv("ZALO_BOT_TOKEN", "1:x")
+    monkeypatch.setattr(zalo_adapter, "AsyncBot", None)
+    assert zalo_adapter.check_requirements() is False

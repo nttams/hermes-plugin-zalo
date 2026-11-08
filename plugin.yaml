@@ -8,12 +8,14 @@ description: >
   messages between Zalo DMs and the Hermes agent. Supports long-polling
   (default) and webhook mode.
 
-  Zero extra dependencies — uses httpx, already a Hermes Agent dependency.
+  Uses zalobot-sdk (Zalo Bot API client; its only dependency is httpx).
 
   Slash commands (/menu, /rules, /noi-quy, /warn, /silent, /mute...),
   zero-token anti-spam + warn system, chat history sync.
 author: Moken
 repository: "https://github.com/moken627-hub/hermes-plugin-zalo"
+python_dependencies:
+  - "zalobot-sdk>=0.1,<0.2"
 requires_env:
   - name: ZALO_BOT_TOKEN
     description: "Zalo Bot API token from bot.zaloplatforms.com (format: numeric_id:secret)"

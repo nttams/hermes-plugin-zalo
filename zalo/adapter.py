@@ -58,12 +58,26 @@ from gateway.config import PlatformConfig, Platform
 
 from hermes_constants import get_hermes_home
 
+# The Zalo Bot API client. Hermes installs it from plugin.yaml's
+# python_dependencies; without it the plugin still loads and
+# check_requirements() reports the missing package.
+try:
+    from zalobot import AsyncBot
+    from zalobot import errors as zalo_errors
+    from zalobot.text import utf16_len
+except ImportError:  # pragma: no cover - exercised by check_requirements
+    AsyncBot = None
+    zalo_errors = None
+
+    def utf16_len(text: str) -> int:
+        """Length the way Zalo's server counts it (UTF-16 units)."""
+        return len(text) + sum(1 for ch in text if ord(ch) > 0xFFFF)
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-ZALO_API_BASE = "https://bot-api.zaloplatforms.com/bot{}"
-MAX_MESSAGE_LENGTH = 2000
+MAX_MESSAGE_LENGTH = 2000  # counted in UTF-16 units, like Zalo's server
 POLLING_TIMEOUT = 30  # seconds for long-poll
 POLLING_INTERVAL = 2  # seconds between polls when no updates
 RECONNECT_DELAY = 5  # seconds before reconnecting after error
@@ -111,6 +125,31 @@ def _image_extension(url: str, *, sticker: bool = False) -> str:
         return ".jpg"
     # Sticker URLs end in ".../sticker/webpc?eid=N" and serve WebP.
     return ".webp" if sticker else ".jpg"
+
+
+def _utf16_index(text: str, limit: int) -> int:
+    """Largest ``i`` with ``utf16_len(text[:i]) <= limit`` (never splits an emoji)."""
+    units = 0
+    for i, ch in enumerate(text):
+        units += 2 if ord(ch) > 0xFFFF else 1
+        if units > limit:
+            return i
+    return len(text)
+
+
+def _cut(text: str, limit: int = MAX_MESSAGE_LENGTH) -> str:
+    """``text`` cut to ``limit`` UTF-16 units: Zalo counts like Java's String.length(),
+    where most emoji take 2, and zalobot refuses longer text before sending."""
+    return text[: _utf16_index(text, limit)]
+
+
+_PLAIN_MARKERS_RE = re.compile(r"\*\*\*|\*\*|__|~~|`")
+_HEADING_RE = re.compile(r"^#{1,6}[ \t]+", re.MULTILINE)
+
+
+def _plain_text(text: str) -> str:
+    """Markdown prepared by ``_prepare_for_zalo`` without its style markers."""
+    return _HEADING_RE.sub("", _PLAIN_MARKERS_RE.sub("", text))
 
 # ── Slash commands registry ───────────────────────────────────────
 SLASH_COMMANDS = {
@@ -197,94 +236,14 @@ SLASH_COMMANDS = {
 }
 
 # ---------------------------------------------------------------------------
-# Zalo API Client (thin HTTP wrapper)
+# Zalo Bot API client
 # ---------------------------------------------------------------------------
 
 
-class _ZaloClient:
-    """Async HTTP client for the Zalo Bot API using httpx."""
-
-    def __init__(self, bot_token: str):
-        self.bot_token = bot_token
-        self._base = ZALO_API_BASE.format(bot_token)
-        self._client = None
-
-    async def _ensure_client(self):
-        if self._client is None:
-            import httpx
-            self._client = httpx.AsyncClient(timeout=httpx.Timeout(60.0))
-
-    async def close(self):
-        if self._client:
-            await self._client.aclose()
-            self._client = None
-
-    async def _post(self, endpoint: str, data: dict = None) -> dict:
-        """POST to an API endpoint and return parsed JSON."""
-        await self._ensure_client()
-        url = f"{self._base}/{endpoint}"
-        try:
-            resp = await self._client.post(url, json=data or {})
-            resp.raise_for_status()
-        except Exception as e:
-            # httpx error text includes the request URL, which embeds the
-            # bot token (/bot{token}/...). Re-raise with the token scrubbed.
-            msg = str(e)
-            if self.bot_token:
-                msg = msg.replace(self.bot_token, "***")
-            raise RuntimeError(f"{type(e).__name__}: {msg}") from None
-        return resp.json()
-
-    async def get_me(self) -> dict:
-        """Verify bot token and get bot info."""
-        return await self._post("getMe")
-
-    async def get_updates(self, timeout: int = POLLING_TIMEOUT) -> list:
-        """Long-poll for new updates.
-
-        Returns a list of update objects (handles both single-object and
-        array response formats from the Zalo API).
-        """
-        result = await self._post("getUpdates", {"timeout": timeout})
-        if not result.get("ok"):
-            return []
-        raw = result.get("result")
-        if isinstance(raw, list):
-            return raw
-        if isinstance(raw, dict):
-            # Single object — wrap in list for uniform handling
-            return [raw]
-        return []
-
-    async def send_message(self, chat_id: str, text: str, parse_mode: Optional[str] = None) -> dict:
-        """Send a text message (max 2000 chars).
-
-        When ``parse_mode`` ("markdown" or "html") is set, the Zalo server
-        parses the markup in ``text`` and strips it from the displayed
-        content, applying native rich-text styles. See
-        https://docs.zaloplatforms.com/docs/BOT/apis/sendMessage.
-        We never send ``text_styles`` alongside it — if both are present the
-        server prefers ``parse_mode`` and ignores ``text_styles``.
-        """
-        # Truncate if too long
-        text = text[:MAX_MESSAGE_LENGTH]
-        payload = {"chat_id": chat_id, "text": text}
-        if parse_mode:
-            payload["parse_mode"] = parse_mode
-        return await self._post("sendMessage", payload)
-
-    async def send_photo(self, chat_id: str, photo_url: str, caption: str = "", parse_mode: Optional[str] = None) -> dict:
-        """Send a photo from a URL."""
-        payload = {"chat_id": chat_id, "photo": photo_url}
-        if caption:
-            payload["caption"] = caption[:MAX_MESSAGE_LENGTH]
-            if parse_mode:
-                payload["parse_mode"] = parse_mode
-        return await self._post("sendPhoto", payload)
-
-    async def send_chat_action(self, chat_id: str, action: str = "typing") -> dict:
-        """Send a chat action indicator."""
-        return await self._post("sendChatAction", {"chat_id": chat_id, "action": action})
+def _new_bot(token: str) -> "AsyncBot":
+    """The Bot API client (zalobot): typed answers, Zalo error codes as
+    exceptions, and the token kept out of error text, repr() and httpx logs."""
+    return AsyncBot(token, timeout=60.0)
 
 
 # ---------------------------------------------------------------------------
@@ -588,7 +547,7 @@ class ZaloAdapter(BasePlatformAdapter):
         self.webhook_host = str(extra.get("webhook_host", "127.0.0.1"))
 
         # Runtime state
-        self._client: Optional[_ZaloClient] = None
+        self._client: Optional[AsyncBot] = None
         self._poll_task: Optional[asyncio.Task] = None
         self._webhook_runner: Optional[asyncio.Task] = None
         self._bot_info: Optional[dict] = None
@@ -598,6 +557,7 @@ class ZaloAdapter(BasePlatformAdapter):
         self._pending_approvals: Dict[str, dict] = {}  # chat_id -> captcha info
         self._captcha_passed: set = set()  # chat_ids that solved the captcha
         self._webhook_tasks: set = set()  # webhook events still being handled
+        self._fatal_task: Optional[asyncio.Task] = None
 
         # Moderation and per-group settings (all local: the Zalo Bot API has
         # no group management methods).
@@ -610,7 +570,7 @@ class ZaloAdapter(BasePlatformAdapter):
         """Placeholder kept for callers wanting a display form of the token.
 
         Note: the plugin's actual redaction path replaces the raw token with
-        ``***`` in error text (see ``_ZaloClient._post``); this helper is not
+        ``<token>`` in error text (zalobot does it); this helper is not
         part of any log output.
         """
         if len(token) <= 12:
@@ -634,33 +594,35 @@ class ZaloAdapter(BasePlatformAdapter):
             )
             return False
 
-        self._client = _ZaloClient(self.bot_token)
+        try:
+            self._client = _new_bot(self.bot_token)
+        except ValueError as e:  # malformed token (spaces, "/")
+            self._set_fatal_error("config_invalid", str(e), retryable=False)
+            return False
 
         # Verify token
         try:
             me = await self._client.get_me()
-            if not me.get("ok"):
-                logger.error("Zalo: token verification failed: %s", me)
-                self._set_fatal_error(
-                    "auth_failed",
-                    f"Zalo token rejected: {me}",
-                    retryable=False,
-                )
-                return False
-            self._bot_info = me.get("result", {})
-            self._bot_id = str(self._bot_info.get("id", ""))
-            self._bot_name = self._bot_info.get("account_name", "")
-            self._bot_display_name = self._bot_info.get("display_name", "")
-            logger.info(
-                "Zalo: verified bot '%s' (id=%s, type=%s)",
-                self._bot_info.get("account_name", "?"),
-                self._bot_info.get("id", "?"),
-                self._bot_info.get("account_type", "?"),
-            )
-        except Exception as e:
+        except zalo_errors.Unauthorized as e:
+            logger.error("Zalo: token rejected: %s", e)
+            self._set_fatal_error("auth_failed", f"Zalo token rejected: {e}", retryable=False)
+            await self._close_client()
+            return False
+        except zalo_errors.ZaloError as e:
             logger.error("Zalo: token verification error: %s", e)
             self._set_fatal_error("auth_error", str(e), retryable=True)
+            await self._close_client()
             return False
+        self._bot_info = me.raw
+        self._bot_id = me.id
+        self._bot_name = me.account_name
+        self._bot_display_name = me.raw.get("display_name", "")
+        logger.info(
+            "Zalo: verified bot '%s' (id=%s, type=%s)",
+            me.account_name or "?",
+            me.id or "?",
+            me.account_type or "?",
+        )
 
         # Start receiving messages (polling or webhook)
         if self.webhook_url and self.webhook_secret:
@@ -703,6 +665,9 @@ class ZaloAdapter(BasePlatformAdapter):
             task.cancel()
         self._webhook_tasks.clear()
 
+        await self._close_client()
+
+    async def _close_client(self) -> None:
         if self._client:
             await self._client.close()
             self._client = None
@@ -714,39 +679,27 @@ class ZaloAdapter(BasePlatformAdapter):
         self._poll_task = asyncio.create_task(self._poll_loop())
 
     async def _poll_loop(self) -> None:
-        """Continuously poll for updates."""
-        last_update_id = 0
+        """Continuously poll for updates.
+
+        getUpdates answers 408 when no message came within its timeout;
+        zalobot turns that into an empty list.
+        """
         consecutive_errors = 0
 
         while self.is_connected:
             try:
                 updates = await self._client.get_updates(timeout=POLLING_TIMEOUT)
-
-                if not updates:
-                    await asyncio.sleep(POLLING_INTERVAL)
-                    continue
-
-                consecutive_errors = 0
-
-                for update in updates:
-                    event_name = update.get("event_name", "")
-                    message = update.get("message") or update.get("result", {}).get("message", {})
-
-                    if not message:
-                        continue
-
-                    await self._handle_incoming(event_name, message)
-
-                    # Track the last update ID to avoid duplicates
-                    mid = message.get("message_id", "") or update.get("message_id", "")
-                    if mid:
-                        try:
-                            last_update_id = int(mid, 16)  # hex string
-                        except (ValueError, TypeError):
-                            pass
-
             except asyncio.CancelledError:
                 raise
+            except zalo_errors.Unauthorized as e:
+                # The token was revoked or reset: retrying can't help.
+                logger.error("Zalo: token rejected while polling: %s", e)
+                self._set_fatal_error("auth_failed", f"Zalo token rejected: {e}", retryable=False)
+                # Report from a separate task: the gateway's handler may call
+                # disconnect(), which cancels this poll task (Hermes 0.19 runs
+                # the handler inline, so it would be cancelled midway).
+                self._fatal_task = asyncio.create_task(self._notify_fatal_error())
+                return
             except Exception as e:
                 consecutive_errors += 1
                 delay = min(RECONNECT_DELAY * consecutive_errors, 60)
@@ -755,6 +708,22 @@ class ZaloAdapter(BasePlatformAdapter):
                     consecutive_errors, e, delay,
                 )
                 await asyncio.sleep(delay)
+                continue
+
+            consecutive_errors = 0
+            if not updates:
+                await asyncio.sleep(POLLING_INTERVAL)
+                continue
+            for update in updates:
+                if update.message is None:
+                    continue
+                try:
+                    await self._handle_incoming(update.event_name, update.message.raw)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    # One bad message must not drop the others or stall polling.
+                    logger.exception("Zalo: error handling %s", update.event_name)
 
     # ── Webhook mode ──────────────────────────────────────────────────────
 
@@ -1261,13 +1230,9 @@ class ZaloAdapter(BasePlatformAdapter):
         if not self._client:
             return SendResult(success=False, error="Not connected")
         try:
-            result = await self._client.send_message(chat_id, text)
-            if result.get("ok"):
-                msg_id = result.get("result", {}).get("message_id", "")
-                return SendResult(success=True, message_id=msg_id)
-            else:
-                return SendResult(success=False, error=str(result))
-        except Exception as e:
+            sent = await self._client.send_message(chat_id, _cut(text))
+            return SendResult(success=True, message_id=sent.message_id)
+        except (zalo_errors.ZaloError, ValueError) as e:
             return SendResult(success=False, error=str(e))
 
     async def send(
@@ -1293,48 +1258,41 @@ class ZaloAdapter(BasePlatformAdapter):
         if not prepared:
             return SendResult(success=False, error="Empty message after formatting")
 
-        chunks = self._split_chunks(prepared)
-
-        last_result = None
-        for chunk in chunks:
+        sent = None
+        for chunk in self._split_chunks(prepared):
             try:
-                result = await self._client.send_message(chat_id, chunk, parse_mode="markdown")
-                last_result = result
+                sent = await self._client.send_message(chat_id, chunk, parse_mode="markdown")
                 await asyncio.sleep(0.3)
-            except Exception as e:
+            except (zalo_errors.ZaloError, ValueError) as e:
                 return SendResult(success=False, error=str(e))
 
-        if last_result and last_result.get("ok"):
-            msg_id = last_result.get("result", {}).get("message_id", "")
-            return SendResult(success=True, message_id=msg_id)
-        return SendResult(success=False, error=str(last_result or "Send failed"))
+        if sent is None:
+            return SendResult(success=False, error="Send failed")
+        return SendResult(success=True, message_id=sent.message_id)
 
     async def send_typing(self, chat_id: str, metadata=None) -> None:
         """Send typing indicator via the Zalo API."""
         if not self._client:
             return
         try:
-            await self._client.send_chat_action(chat_id, "typing")
-        except Exception:
+            await self._client.send_chat_action(chat_id)
+        except (zalo_errors.ZaloError, ValueError):
             pass
 
     async def send_image(self, chat_id: str, image_url: str, caption: str = "") -> SendResult:
-        """Send an image message (caption rendered via parse_mode markdown)."""
+        """Send an image from a URL (Zalo fetches it).
+
+        sendPhoto documents no ``parse_mode``
+        (https://bot.zaloplatforms.com/docs/apis/sendPhoto/), so the caption
+        goes as plain text with markdown markers removed.
+        """
         if not self._client:
             return SendResult(success=False, error="Not connected")
         try:
-            prepared_caption = self._prepare_for_zalo(caption) if caption else ""
-            result = await self._client.send_photo(
-                chat_id,
-                image_url,
-                prepared_caption,
-                parse_mode="markdown" if prepared_caption else None,
-            )
-            if result.get("ok"):
-                msg_id = result.get("result", {}).get("message_id", "")
-                return SendResult(success=True, message_id=msg_id)
-            return SendResult(success=False, error=str(result))
-        except Exception as e:
+            plain = _cut(_plain_text(self._prepare_for_zalo(caption))) if caption else ""
+            sent = await self._client.send_photo(chat_id, image_url, plain or None)
+            return SendResult(success=True, message_id=sent.message_id)
+        except (zalo_errors.ZaloError, ValueError) as e:
             return SendResult(success=False, error=str(e))
 
     async def get_chat_info(self, chat_id: str) -> Dict[str, Any]:
@@ -1538,7 +1496,7 @@ class ZaloAdapter(BasePlatformAdapter):
 
     @staticmethod
     def _split_chunks(text: str) -> List[str]:
-        """Split prepared text into <=2000-char chunks on paragraph boundaries.
+        """Split prepared text into chunks of <=2000 UTF-16 units on paragraph boundaries.
 
         Splits greedily at blank-line paragraph boundaries, then at line
         boundaries. A ``**bold**`` span can still straddle a boundary (a
@@ -1552,16 +1510,17 @@ class ZaloAdapter(BasePlatformAdapter):
         (t_ded994c7 FIX-3, t_155aaa0d v2.2.2)
         """
         cap = MAX_MESSAGE_LENGTH
-        if len(text) <= cap:
+        if utf16_len(text) <= cap:
             return ZaloAdapter._rebalance_bold_spans([text])
 
         def _hard_split(line: str) -> List[str]:
             """Last resort for one over-long line: cut at the nearest space."""
             out: List[str] = []
-            while len(line) > cap:
-                cut = line.rfind(" ", 0, cap)
+            while utf16_len(line) > cap:
+                end = _utf16_index(line, cap)
+                cut = line.rfind(" ", 0, end)
                 if cut <= 0:
-                    cut = cap  # no whitespace: unavoidable mid-token cut
+                    cut = end  # no whitespace: unavoidable mid-token cut
                 out.append(line[:cut].rstrip())
                 line = line[cut:].lstrip()
             if line:
@@ -1575,7 +1534,7 @@ class ZaloAdapter(BasePlatformAdapter):
             if not para:
                 continue
             candidate = f"{current}\n\n{para}" if current else para
-            if len(candidate) <= cap:
+            if utf16_len(candidate) <= cap:
                 current = candidate
                 continue
             if current:
@@ -1583,13 +1542,13 @@ class ZaloAdapter(BasePlatformAdapter):
                 current = ""
             # Paragraph doesn't fit alone: pack its lines, split long lines.
             for piece in para.split("\n"):
-                if len(piece) > cap:
+                if utf16_len(piece) > cap:
                     if current:
                         chunks.append(current)
                         current = ""
                     chunks.extend(_hard_split(piece))
                     continue
-                if current and len(current) + len(piece) + 1 > cap:
+                if current and utf16_len(current) + utf16_len(piece) + 1 > cap:
                     chunks.append(current)
                     current = piece
                 else:
@@ -1640,7 +1599,10 @@ def _webhook_update(body: Any) -> tuple[str, dict]:
 
 
 def check_requirements() -> bool:
-    """Check if Zalo is configured."""
+    """Check that Zalo is configured and the zalobot-sdk package is installed."""
+    if AsyncBot is None:
+        logger.warning("Zalo: the zalobot-sdk package is missing (pip install 'zalobot-sdk>=0.1,<0.2')")
+        return False
     token = _resolve_zalo_secret("ZALO_BOT_TOKEN")
     return bool(token)
 
@@ -1753,25 +1715,27 @@ async def _standalone_send(
     if not token:
         return {"error": "Zalo standalone send: ZALO_BOT_TOKEN must be configured"}
 
-    client = _ZaloClient(token.strip())
+    try:
+        bot = _new_bot(token.strip())
+    except ValueError as e:
+        return {"error": f"Zalo standalone send: {e}"}
     try:
         # Send media if provided
         if media_files:
             for media_url in media_files[:1]:  # only send first media
-                caption = message[:MAX_MESSAGE_LENGTH] if message else ""
-                result = await client.send_photo(chat_id, media_url, caption)
-                if result.get("ok"):
-                    return {"success": True, "message_id": result.get("result", {}).get("message_id", "")}
+                caption = _cut(message) if message else None
+                try:
+                    sent = await bot.send_photo(chat_id, media_url, caption)
+                    return {"success": True, "message_id": sent.message_id}
+                except (zalo_errors.ZaloError, ValueError) as e:
+                    logger.warning("Zalo standalone send: photo failed, sending text: %s", e)
 
-        # Send text
-        result = await client.send_message(chat_id, message[:MAX_MESSAGE_LENGTH])
-        if result.get("ok"):
-            return {"success": True, "message_id": result.get("result", {}).get("message_id", "")}
-        return {"error": str(result)}
-    except Exception as e:
+        sent = await bot.send_message(chat_id, _cut(message))
+        return {"success": True, "message_id": sent.message_id}
+    except (zalo_errors.ZaloError, ValueError) as e:
         return {"error": f"Zalo standalone send failed: {e}"}
     finally:
-        await client.close()
+        await bot.close()
 
 
 def parse_slash_command(text: str) -> Optional[Dict[str, Any]]:
@@ -1837,7 +1801,7 @@ def register(ctx):
         validate_config=validate_config,
         is_connected=is_connected,
         required_env=["ZALO_BOT_TOKEN"],
-        install_hint="No extra packages needed (uses httpx, already a Hermes dependency)",
+        install_hint="pip install 'zalobot-sdk>=0.1,<0.2'",
         setup_fn=interactive_setup,
         env_enablement_fn=_env_enablement,
         cron_deliver_env_var="ZALO_HOME_CHANNEL",

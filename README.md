@@ -29,7 +29,7 @@ A **platform plugin** for [Hermes Agent](https://github.com/NousResearch/hermes-
 | 📋 Allowlist / Open access policies | ✅ |
 | 📬 Cron delivery (`deliver=zalo`) | ✅ |
 | ⚙️ Interactive setup wizard (`hermes gateway setup`) | ✅ |
-| 📦 Zero extra dependencies (uses httpx, already a Hermes dep) | ✅ |
+| 📦 One small dependency: [zalobot-sdk](https://pypi.org/project/zalobot-sdk/) (httpx only), installed by Hermes | ✅ |
 | 📝 Slash commands (/menu, /rules, /noi-quy, /warn, /silent, /mute, /welcome...) | ✅ v2 |
 | 🛡️ Zero-token anti-spam + warn system | ✅ v2 |
 | 📜 Chat history sync (JSONL, search) | ✅ v2 |
@@ -55,10 +55,22 @@ the plugin, and admin commands are for users in `ZALO_ALLOWED_USERS`.
 ### 1. Install the plugin
 
 ```bash
-# Clone to user plugins directory
-git clone https://github.com/moken627-hub/hermes-plugin-zalo.git \
-    ~/.hermes/plugins/zalo
+hermes plugins install moken627-hub/hermes-plugin-zalo
 ```
+
+The plugin needs one Python package, [zalobot-sdk](https://pypi.org/project/zalobot-sdk/)
+(the Zalo Bot API client; it depends only on httpx). `hermes plugins install` asks
+before installing it, and `hermes plugins enable` installs it into Hermes' environment.
+
+Installed with `git clone` into `~/.hermes/plugins/`, or on a Hermes that doesn't
+read `python_dependencies`? Install the package into the Python that runs Hermes:
+
+```bash
+pip install 'zalobot-sdk>=0.1,<0.2'
+```
+
+Without it, `hermes gateway status` shows Zalo as missing a requirement and the
+gateway log says `the zalobot-sdk package is missing`.
 
 ### 2. Create a Zalo Bot
 
@@ -219,6 +231,19 @@ so a change in Hermes' adapter API fails a test instead of a live chat.
 ---
 
 ## 📝 Changelog
+
+### Unreleased
+
+- ⚠️ **New dependency:** `zalobot-sdk` (see Quick Start). A `git pull` alone leaves
+  the plugin disabled until it is installed.
+- 📷 Incoming photos, stickers and voice reach the agent; incoming photos no longer
+  crash the handler.
+- 🌐 Webhook: the documented bare event body is accepted, and Zalo gets its 200
+  before the event is handled.
+- 👥 Group commands that called methods the Bot API doesn't have are removed; admin
+  commands work in groups for users in `ZALO_ALLOWED_USERS`; `/mute`, `/unmute` and
+  `/noi-quy` are local.
+- 🔐 A revoked token stops polling with a fatal error instead of retrying forever.
 
 ### v2.0.0 (2026-08-02)
 
