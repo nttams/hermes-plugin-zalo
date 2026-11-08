@@ -50,6 +50,7 @@ from gateway.platforms.base import (
     SendResult,
     MessageEvent,
     MessageType,
+    cache_audio_from_url,
     cache_image_from_url,
 )
 from gateway.session import SessionSource
@@ -90,6 +91,26 @@ def _safe_path_component(identifier: str) -> str:
     """Reduce a chat/group ID to [A-Za-z0-9_-] for local file names."""
     sanitized = _SAFE_ID_RE.sub("_", str(identifier))[:128]
     return sanitized or "unknown"
+
+
+_IMAGE_MIME = {
+    ".jpg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
+
+
+def _image_extension(url: str, *, sticker: bool = False) -> str:
+    """File extension for a Zalo image URL (query ignored); stickers are WebP."""
+    path = url.split("?", 1)[0].lower()
+    for ext in (".png", ".gif", ".webp", ".jpg"):
+        if path.endswith(ext):
+            return ext
+    if path.endswith(".jpeg"):
+        return ".jpg"
+    # Sticker URLs end in ".../sticker/webpc?eid=N" and serve WebP.
+    return ".webp" if sticker else ".jpg"
 
 # ── Slash commands registry ───────────────────────────────────────
 SLASH_COMMANDS = {
@@ -966,13 +987,16 @@ class ZaloAdapter(BasePlatformAdapter):
         text = raw_text
 
         if event_name == "message.image.received":
-            message_type = MessageType.IMAGE
-            media_url = message.get("photo", "")
-            if not text and message.get("caption"):
-                text = message["caption"]
+            message_type = MessageType.PHOTO
+            # Documented field is photo_url; "photo" kept for older payloads.
+            media_url = message.get("photo_url") or message.get("photo") or None
         elif event_name == "message.sticker.received":
             message_type = MessageType.STICKER
-            text = message.get("sticker", "") or message.get("url", "") or "[Sticker]"
+            media_url = message.get("url") or None  # the sticker's image
+            text = "[Sticker]"
+        elif event_name == "message.voice.received":
+            message_type = MessageType.VOICE
+            media_url = message.get("voice_url") or None
         elif event_name == "message.unsupported.received":
             text = "[Unsupported message type]"
 
@@ -1419,6 +1443,10 @@ class ZaloAdapter(BasePlatformAdapter):
         if not self._message_handler:
             return
 
+        media_urls, media_types = await self._cache_media(message_type, media_url)
+        if message_type == MessageType.VOICE and not media_urls and not text:
+            text = "[Voice message]"
+
         source = self.build_source(
             chat_id=chat_id,
             chat_name=chat_id if chat_type == "group" else user_name,
@@ -1433,9 +1461,32 @@ class ZaloAdapter(BasePlatformAdapter):
             source=source,
             message_id=str(int(time.time() * 1000)),
             timestamp=datetime.now(),
+            media_urls=media_urls,
+            media_types=media_types,
         )
 
         await self.handle_message(event)
+
+    async def _cache_media(
+        self, message_type: MessageType, media_url: Optional[str]
+    ) -> tuple[List[str], List[str]]:
+        """Download a photo, sticker image or voice clip into Hermes' media cache.
+
+        Returns ``(local paths, MIME types)`` for the MessageEvent, so Hermes'
+        vision and speech-to-text see the media. A failed download is logged
+        and the message still goes through without it.
+        """
+        if not media_url:
+            return [], []
+        try:
+            if message_type == MessageType.VOICE:
+                # Zalo voice messages are AAC (sendVoice accepts only .aac too).
+                return [await cache_audio_from_url(media_url, ext=".aac")], ["audio/aac"]
+            ext = _image_extension(media_url, sticker=message_type == MessageType.STICKER)
+            return [await cache_image_from_url(media_url, ext=ext)], [_IMAGE_MIME[ext]]
+        except Exception as e:
+            logger.warning("Zalo: could not download %s media: %s", message_type.value, e)
+            return [], []
 
     # ── Sending ───────────────────────────────────────────────────────────
 
