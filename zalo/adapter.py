@@ -924,13 +924,9 @@ class ZaloAdapter(BasePlatformAdapter):
                 return web.Response(status=403, text="Unauthorized")
 
             try:
-                body = await request.json()
-                if body.get("ok"):
-                    result = body.get("result", {})
-                    event_name = result.get("event_name", "")
-                    message = result.get("message", {})
-                    if message:
-                        await self._handle_incoming(event_name, message)
+                event_name, message = _webhook_update(await request.json())
+                if message:
+                    await self._handle_incoming(event_name, message)
                 return web.json_response({"ok": True})
             except Exception as e:
                 logger.warning("Zalo: webhook handler error: %s", e)
@@ -1855,6 +1851,23 @@ def _resolve_zalo_secret(name: str, default: str = "") -> str:
     except Exception:
         val = ""
     return (val or os.getenv(name) or default).strip()
+
+def _webhook_update(body: Any) -> tuple[str, dict]:
+    """``(event_name, message)`` from a webhook POST body.
+
+    Zalo documents the body as the bare event, ``{"event_name": ..., "message":
+    {...}}`` (https://bot.zaloplatforms.com/docs/webhook/). The getUpdates
+    envelope ``{"ok": true, "result": {...}}`` is accepted too.
+    """
+    if not isinstance(body, dict):
+        return "", {}
+    if isinstance(body.get("result"), dict):
+        if not body.get("ok"):
+            return "", {}
+        body = body["result"]
+    message = body.get("message")
+    return str(body.get("event_name") or ""), message if isinstance(message, dict) else {}
+
 
 def check_requirements() -> bool:
     """Check if Zalo is configured."""

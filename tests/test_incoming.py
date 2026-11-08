@@ -110,3 +110,20 @@ async def test_menu_answers_an_allowed_user(make_adapter, fake):
     await _handle(adapter, update(fake, text="/menu", chat_id=USER))
     assert "/menu" in fake.sent[-1].text
     assert inbox.events == []
+
+
+def test_webhook_body_as_zalo_documents_it(fake):
+    """Regression: the handler only read {"ok": true, "result": ...} and dropped the documented bare event."""
+    from zalo.adapter import _webhook_update
+
+    event = update(fake, text="qua webhook", chat_id=USER)
+    assert _webhook_update(event) == ("message.text.received", event["message"])
+
+
+def test_webhook_body_in_the_getupdates_envelope(fake):
+    from zalo.adapter import _webhook_update
+
+    event = update(fake, text="bọc ok/result", chat_id=USER)
+    assert _webhook_update({"ok": True, "result": event}) == ("message.text.received", event["message"])
+    assert _webhook_update({"ok": False, "result": event}) == ("", {})
+    assert _webhook_update(["not", "a", "dict"]) == ("", {})
