@@ -30,12 +30,15 @@ A **platform plugin** for [Hermes Agent](https://github.com/NousResearch/hermes-
 | 📬 Cron delivery (`deliver=zalo`) | ✅ |
 | ⚙️ Interactive setup wizard (`hermes gateway setup`) | ✅ |
 | 📦 Zero extra dependencies (uses httpx, already a Hermes dep) | ✅ |
-| 👥 Group management (create, kick, admin, poll, pin, invite) | ✅ v2 |
-| 📝 Slash commands (/menu, /warn, /kick, /promote, /poll, /pin...) | ✅ v2 |
+| 📝 Slash commands (/menu, /rules, /noi-quy, /warn, /silent, /mute, /welcome...) | ✅ v2 |
 | 🛡️ Zero-token anti-spam + warn system | ✅ v2 |
 | 📜 Chat history sync (JSONL, search) | ✅ v2 |
 | 👥 CRM contacts (import/export CSV, search by phone) | ✅ v2 |
-| 📊 Group info, member list, announcements | ✅ v2 |
+
+Zalo's Bot API has no group management methods (no kick, poll, pin, roles or
+member list; see the [API list](https://bot.zaloplatforms.com/docs/)), so group
+commands are local to the bot: settings, rules, warnings and mute are kept by
+the plugin, and admin commands are for users in `ZALO_ALLOWED_USERS`.
 
 ### 🗺️ Roadmap
 
@@ -157,10 +160,8 @@ Then configure your webhook URL in the Zalo Bot Platform dashboard.
 hermes-plugin-zalo/
 ├── zalo/
 │   ├── __init__.py          # Plugin entry point (exports register)
-│   ├── adapter.py           # Full Zalo adapter + moderation + group mgmt
+│   ├── adapter.py           # Zalo adapter + moderation + group settings
 │   ├── plugin.yaml          # Plugin metadata & config schema
-│   ├── group_manager.py     # Group management (create/kick/admin/poll/pin)
-│   ├── moderation.py        # Anti-spam, warn system, CRM, history sync
 │   └── ...
 ├── examples/
 │   └── config.yaml          # Example configuration

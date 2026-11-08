@@ -113,7 +113,7 @@ class Inbox:
 
 
 @pytest_asyncio.fixture
-async def make_adapter(route_to_fake, monkeypatch):
+async def make_adapter(route_to_fake, monkeypatch, tmp_path):
     """-> async factory: a ZaloAdapter that talks to the fake, plus its Inbox.
 
     ``connect=False`` skips getMe and the poll loop; the bot's name and id are set
@@ -124,6 +124,9 @@ async def make_adapter(route_to_fake, monkeypatch):
     async def factory(*, connect: bool = False, **extra):
         extra.setdefault("bot_token", route_to_fake.token)
         extra.setdefault("dm_policy", "open")
+        # Per-test files for group settings and chat history.
+        monkeypatch.setattr(zalo_adapter._GroupSettings, "SETTINGS_FILE", str(tmp_path / "settings"))
+        monkeypatch.setattr(zalo_adapter, "HISTORY_DIR", str(tmp_path / "history"))
         adapter = zalo_adapter.ZaloAdapter(PlatformConfig(enabled=True, extra=extra))
         inbox = Inbox()
         adapter.set_message_handler(inbox.handle_message)
